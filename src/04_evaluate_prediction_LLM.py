@@ -7,21 +7,22 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 # ★ 設定エリア（ここを変えるだけでOK！） ★
 # ==========================================
 # 解析したい期間
-START_DATE = "2024-08-01"
-END_DATE   = "2024-08-31" 
+START_DATE = "2024-06-01"
+END_DATE   = "2024-12-31" 
 
 # ★追加：使用したモデル名（レポートに記載されます）★
 MODEL_NAME = "GPT-OSS-120B" 
 # ※ここを "Ollama(Llama3-70B)" や "Gemma-2-27B" など書き換える
 
 # 入力フォルダ（推論結果のテキストがある場所）
-PREDICTION_DIR = "/home/sakulab/workspace/B4_ikeda/graduation_thesis/data/summary_test_august/"
+PREDICTION_DIR = "/home/sakulab/workspace/B4_ikeda/graduation_thesis/data/summary_reasoning_augasuto_v3/"
 
 # 正解データのCSVパス
-FINANCE_CSV = "/home/sakulab/workspace/B4_ikeda/graduation_thesis/data/finance/nikkei_225_labeled.csv"
+FINANCE_CSV = "/home/sakulab/workspace/B4_ikeda/graduation_thesis/data/f" \
+"inance/nikkei_225_labeled.csv"
 
 # 結果レポートの保存先
-REPORT_FILE = f"/home/sakulab/workspace/B4_ikeda/graduation_thesis/result/LLM_{START_DATE}_{END_DATE}/evaluation_report_{START_DATE}_{END_DATE}.txt"
+REPORT_FILE = f"/home/sakulab/workspace/B4_ikeda/graduation_thesis/result/LLM_{START_DATE}_{END_DATE}_v1/evaluation_report_{START_DATE}_{END_DATE}.txt"
 # ==========================================
 
 # 保存先のフォルダパスを取り出す
@@ -78,11 +79,22 @@ with open(REPORT_FILE, "w", encoding="utf-8") as f_out:
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read().strip()
 
-        # --- 判定ロジック ---
+        # --- 判定ロジック (最強版) ---
         prediction = None
-        header_text = content[:50] 
         
-        if "【上昇】" in header_text:
+        # Markdownの装飾(*や#)とスペースを削除して判定しやすくする
+        clean_content = content.replace("*", "").replace("#", "").replace(" ", "")
+        # 判定対象は冒頭50文字程度で十分だが、念のため少し広めに取る
+        header_text = clean_content[:100] 
+
+        # パターン1: 新フォーマット "【予測】上昇" (スペース除去済みなのでこれでOK)
+        if "【予測】上昇" in header_text:
+            prediction = 1
+        elif "【予測】下落" in header_text:
+            prediction = 0
+            
+        # パターン2: 旧フォーマット "【上昇】" (念のため)
+        elif "【上昇】" in header_text:
             prediction = 1
         elif "【下落】" in header_text:
             prediction = 0
@@ -93,7 +105,7 @@ with open(REPORT_FILE, "w", encoding="utf-8") as f_out:
             y_pred.append(prediction)
             valid_dates.append(date_str)
         else:
-            log_print(f"⚠️ {date_str}: 判定不能（【上昇/下落】が見つかりません）", f_out)
+            log_print(f"⚠️ {date_str}: 判定不能（フォーマット不一致）", f_out)
 
     log_print(f"📄 期間内のファイル数: {count_target} 件", f_out)
     log_print(f"✅ 有効な評価ペア数: {len(y_true)} 件 (土日祝除く)", f_out)
@@ -109,7 +121,7 @@ with open(REPORT_FILE, "w", encoding="utf-8") as f_out:
     f1 = f1_score(y_true, y_pred, zero_division=0)
 
     log_print("\n" + "="*40, f_out)
-    log_print(f"📊 評価レポート: {MODEL_NAME}", f_out) # ★ここにもモデル名を表示
+    log_print(f"📊 評価レポート: {MODEL_NAME}", f_out) 
     log_print("="*40, f_out)
     log_print(f"✅ Accuracy  (正解率): {acc:.2%}", f_out)
     log_print(f"🎯 Precision (適合率): {prec:.2%}", f_out)

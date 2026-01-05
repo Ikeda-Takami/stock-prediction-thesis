@@ -6,7 +6,7 @@ from tqdm import tqdm
 # 設定
 # ==========================================
 INPUT_CSV = '/home/sakulab/workspace/B4_ikeda/graduation_thesis/data/raw/Nikkei_filtered.csv'
-OUTPUT_DIR = '/home/sakulab/workspace/B4_ikeda/graduation_thesis/data/corpus/'
+OUTPUT_DIR = '/home/sakulab/workspace/B4_ikeda/graduation_thesis/data/corpus_15/'
 
 def create_corpus():
     if not os.path.exists(OUTPUT_DIR):
@@ -15,9 +15,9 @@ def create_corpus():
     print("データを読み込んでいます...")
     df = pd.read_csv(INPUT_CSV)
     df['created_at'] = pd.to_datetime(df['created_at'], utc=True)
-    df['utc_date'] = df['created_at'].dt.date
+    df['target_date'] = (df['created_at'] + pd.Timedelta(hours=18)).dt.date
     
-    grouped = df.groupby('utc_date')
+    grouped = df.groupby('target_date')
     
     print(f"合計 {len(grouped)} 日分のコーパスを作成します。")
 

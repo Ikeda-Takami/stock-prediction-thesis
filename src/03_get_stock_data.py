@@ -9,66 +9,97 @@ import os
 OUTPUT_DIR = "/home/sakulab/workspace/B4_ikeda/graduation_thesis/data/finance/"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# 保存するファイル名
-CSV_PATH = os.path.join(OUTPUT_DIR, "nikkei_225_labeled.csv")
+# 保存するファイル名（全てのデータが入るので名前を豪華にしました）
+CSV_PATH = os.path.join(OUTPUT_DIR, "market_data_all_labeled.csv")
 
-# 取得期間 (データがある期間より少し広めに設定)
+# 取得期間
 START_DATE = "2017-01-01"
 END_DATE = "2024-12-31"
 # ==========================================
 
-print(f"🚀 日経平均株価 (^N225) を取得中... ({START_DATE} ~ {END_DATE})")
+print(f"🚀 市況データ（日経・ダウ・ドル円）を一括取得中... ({START_DATE} ~ {END_DATE})")
 
-# 1. データ取得 (Yahoo Finance API)
-ticker = "^N225"
-try:
-    df = yf.download(ticker, start=START_DATE, end=END_DATE, progress=False)
-except Exception as e:
-    print(f"❌ データ取得エラー: {e}")
-    exit()
+# 1. 各データを個別に取得（マルチインデックス事故を防ぐため個別取得が安全）
+tickers = {
+    "^N225": "Nikkei",
+    "^DJI": "Dow",
+    "JPY=X": "USDJPY"
+}
 
-if df.empty:
-    print("❌ データが取得できませんでした。インターネット接続を確認してください。")
-    exit()
-
-# 2. データの整形
-# yfinanceのバージョンによってはカラムが多層(MultiIndex)になるので修正
-if isinstance(df.columns, pd.MultiIndex):
+dfs = []
+for ticker, name in tickers.items():
+    print(f" - {name} ({ticker}) をダウンロード中...")
     try:
-        # Tickerレベルを削除してシンプルなカラム名にする
-        df.columns = df.columns.droplevel(1)
-    except:
-        pass
+        # 必要なカラムだけ取得
+        d = yf.download(ticker, start=START_DATE, end=END_DATE, progress=False)
+        d = d[['Close', 'Volume']] if 'Volume' in d.columns else d[['Close']]
+        
+        # カラム名を変更 (例: Close -> Nikkei_Close)
+        # yfinanceのバージョンによるMultiIndex対応
+        if isinstance(d.columns, pd.MultiIndex):
+            d.columns = d.columns.droplevel(1)
+            
+        d = d.rename(columns={
+            'Close': f'{name}_Close',
+            'Volume': f'{name}_Volume'
+        })
+        
+        # タイムゾーン情報があると結合時にエラーになるので削除
+        d.index = d.index.tz_localize(None)
+        dfs.append(d)
+        
+    except Exception as e:
+        print(f"❌ {name} の取得エラー: {e}")
 
-# 不要な行を削除
-df = df.dropna()
+# 2. データの結合 (Merge)
+print("🔄 データを結合しています...")
+# 日経平均の日付を基準（Left Join）にします
+df_merged = dfs[0].join(dfs[1:], how='left')
 
-# 3. 正解ラベルの作成
-# ロジック: 今日のデータ(T)に対して、翌日(T+1)の終値が上がったかどうかを知りたい
-# shift(-1) を使うと「1行下のデータ（未来）」を今の行に持ってこれる
+# 3. 欠損値の処理 (Forward Fill)
+# 例: 日本が祝日でデータがない行はそもそも存在しません(Left Joinのため)
+# 例: アメリカが祝日でDowがない日は、前日のDowをコピーして埋めます
+df_merged = df_merged.ffill()
 
-df["Next_Close"] = df["Close"].shift(-1) # 翌日の終値
+# まだNaNがある（開始日直後など）場合は削除
+df_merged = df_merged.dropna()
 
-# 翌日のデータがない日（最新の日付など）は正解が作れないので削除
-df = df.dropna(subset=["Next_Close"])
+# 4. 特徴量の作成（LLM推論 & LSTM学習用）
+# 前日比（Change）を計算
+df_merged["Nikkei_Change"] = df_merged["Nikkei_Close"].diff()
+df_merged["Dow_Change"] = df_merged["Dow_Close"].diff()
+df_merged["USDJPY_Change"] = df_merged["USDJPY_Close"].diff()
 
-# 正解ラベル: (翌日終値 > 当日終値) なら 1 (上昇), それ以外は 0 (下落)
-df["Actual_Label"] = (df["Next_Close"] > df["Close"]).astype(int)
-df["Actual_Diff"] = df["Next_Close"] - df["Close"]  # 具体的にいくら動いたか
+# 5. 正解ラベルの作成
+# 翌日(T+1)の日経平均終値
+df_merged["Next_Close"] = df_merged["Nikkei_Close"].shift(-1)
 
-# 日付フォーマットを文字列にしておく（後で結合しやすくするため）
-df["Date_Str"] = df.index.strftime("%Y-%m-%d")
+# 翌日のデータがない行は削除
+df_merged = df_merged.dropna(subset=["Next_Close"])
 
-# ★ここが変更点！ "Volume" を追加しました ★
-# 必要なカラムだけ選んで保存
-result_df = df[["Date_Str", "Close", "Volume", "Next_Close", "Actual_Diff", "Actual_Label"]]
+# ラベル: 上昇=1, 下落=0
+df_merged["Actual_Label"] = (df_merged["Next_Close"] > df_merged["Nikkei_Close"]).astype(int)
+df_merged["Actual_Diff"] = df_merged["Next_Close"] - df_merged["Nikkei_Close"]
+
+# 日付カラム作成
+df_merged["Date_Str"] = df_merged.index.strftime("%Y-%m-%d")
+
+# 並び替え（見やすいように）
+cols = [
+    "Date_Str", 
+    "Nikkei_Close", "Nikkei_Change", "Nikkei_Volume",
+    "Dow_Close", "Dow_Change",
+    "USDJPY_Close", "USDJPY_Change",
+    "Next_Close", "Actual_Diff", "Actual_Label"
+]
+# 存在しないカラム（Dow_Volumeなど）を除外して選択
+final_cols = [c for c in cols if c in df_merged.columns]
+result_df = df_merged[final_cols]
 
 # CSV出力
 result_df.to_csv(CSV_PATH, index=False)
 
-print(f"✅ 正解データ（出来高付き）を作成しました: {CSV_PATH}")
+print(f"✅ 完了！最強の市況データを作成しました: {CSV_PATH}")
 print("-" * 30)
-print("--- 作成されたデータ（最初の5行） ---")
-print(result_df.head())
-print("-" * 30)
+print(result_df.tail()) # 最新のデータを確認
 print(f"📊 総データ数: {len(result_df)} 日分")
